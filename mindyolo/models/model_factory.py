@@ -1,7 +1,7 @@
 import os
 import math
 from copy import deepcopy
-from mindspore import nn, ops, load_checkpoint, load_param_into_net
+from mindspore import nn, ops, load_checkpoint, load_param_into_net, ms_function
 from .registry import is_model, model_entrypoint
 from .layers import *
 from .heads import *
@@ -54,6 +54,7 @@ class Model(nn.Cell):
             print(f"Turn on recompute, and the results of the first {model_cfg.recompute_layers} layers "
                   f"will be recomputed.")
 
+    @ms_function
     def construct(self, x):
         y, dt = (), ()  # outputs
         for i in range(len(self.model)):

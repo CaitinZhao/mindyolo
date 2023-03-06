@@ -63,7 +63,7 @@ class YOLOv7Head(nn.Cell):
                 grid_tensor = self._make_grid(nx, ny, out.dtype)
 
                 # y = ops.sigmoid(out)
-                y = ops.Sigmoid()(out)
+                y = out.sigmoid()
                 y[..., 0:2] = (y[..., 0:2] * 2. - 0.5 + grid_tensor) * self.stride[i]  # xy
                 y[..., 2:4] = (y[..., 2:4] * 2) ** 2 * self.anchor_grid[i]  # wh
                 z += (y.view(bs, -1, self.no),)
@@ -157,9 +157,7 @@ class YOLOv7AuxHead(nn.Cell):
 
             if not self.training:  # inference
                 grid_tensor = self._make_grid(nx, ny, out1.dtype)
-
-                # y = ops.sigmoid(out1)
-                y = ops.Sigmoid()(out1)
+                y = out1.sigmoid()
                 y[..., 0:2] = (y[..., 0:2] * 2. - 0.5 + grid_tensor) * self.stride[i]  # xy
                 y[..., 2:4] = (y[..., 2:4] * 2) ** 2 * self.anchor_grid[i]  # wh
                 z += (y.view(bs, -1, self.no),)

@@ -97,7 +97,9 @@ class Enginer:
                 stride=cfg.network.get('stride', None),
                 nc=cfg.data.get('nc', None)
             )
-            ms.amp.auto_mixed_precision(self.loss, amp_level=self.amp_level)
+            self.network.set_grad(True)
+            self.loss.set_grad(True)
+            self.loss.to_float(ms.float32)
 
             # Create Optimizer
             cfg.optimizer.steps_per_epoch = self.steps_per_epoch
@@ -115,7 +117,6 @@ class Enginer:
                                                          ms_jit=self.ms_jit)
             self.accumulate_grads_fn = self.get_accumulate_grads_fn()
             self.network.set_train(True)
-            self.optimizer.set_train(True)
 
         elif task in ('val', 'eval', 'test'):
             self.dataloader, self.dataset = create_dataloader(data_config=cfg.data,
@@ -281,6 +282,7 @@ class Enginer:
                 s_time = time.time()
 
     def train_step(self, imgs, labels, size=None, cur_step=0, cur_epoch=0):
+        logger.info("train_step")
         if self.accumulate == 1:
             loss, loss_item, _, grads_finite = self.train_step_fn(imgs, labels, size, True)
             if self.ema:
@@ -530,7 +532,7 @@ class Enginer:
 
     @staticmethod
     def _get_train_step_fn(network, loss_fn, optimizer, rank_size, scaler, reducer, overflow_still_update=False, ms_jit=False):
-        from mindyolo.utils.all_finite import all_finite
+        from mindspore.amp import init_status, all_finite
 
         def forward_func(x, label, sizes=None):
             if sizes is not None:
@@ -538,25 +540,31 @@ class Enginer:
             pred = network(x)
             loss, loss_items = loss_fn(pred, label, x)
             loss *= rank_size
-            return scaler.scale(loss), loss_items
+            logger.info("forward_func")
+            return scaler.unscale(loss), loss_items
 
         grad_fn = ops.value_and_grad(forward_func, grad_position=None, weights=optimizer.parameters, has_aux=True)
+        # grad_fn = ops.GradOperation(get_by_list=True, sens_param=True)(forward_func, optimizer.parameters)
 
         def train_step_func(x, label, sizes=None, optimizer_update=True):
+            # loss, loss_items = forward_func(x, label, sizes)
+            # sens1, sens2 = ops.fill(loss.dtype, loss.shape, 1), \
+            #                ops.fill(loss_items.dtype, loss_items.shape, 0)
+            # grads = grad_fn(x, label, sizes, (sens1, sens2))
+            status = init_status()
             (loss, loss_items), grads = grad_fn(x, label, sizes)
-            loss = scaler.unscale(loss)
+            grads = scaler.unscale(grads)
             grads = reducer(grads)
-            unscaled_grads = scaler.unscale(grads)
-            grads_finite = all_finite(unscaled_grads)
+            grads_finite = all_finite(grads, status)
 
             if optimizer_update:
                 if grads_finite:
-                    loss = ops.depend(loss, optimizer(unscaled_grads))
+                    loss = ops.depend(loss, optimizer(grads))
                 else:
                     if overflow_still_update:
-                        loss = ops.depend(loss, optimizer(unscaled_grads))
-
-            return loss, loss_items, unscaled_grads, grads_finite
+                        loss = ops.depend(loss, optimizer(grads))
+            logger.info("grad_fn")
+            return loss, loss_items, grads, grads_finite
 
         @ms.ms_function
         def jit_warpper(*args):

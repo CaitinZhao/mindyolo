@@ -6,7 +6,8 @@ from mindspore import ops, nn, Tensor, Parameter
 
 from mindyolo.models.registry import register_model
 
-from .focal_loss import FocalLoss, BCEWithLogitsLoss, smooth_BCE
+from .focal_loss import FocalLoss
+from .bce_loss import BCEWithLogitsLoss
 from .iou_loss import bbox_iou, batch_box_iou
 
 CLIP_VALUE = 1000.
@@ -16,6 +17,10 @@ __all__ = [
     'YOLOv7Loss',
     'YOLOv7AuxLoss'
 ]
+
+def smooth_BCE(eps=0.1):
+    # return positive, negative label smoothing BCE targets, https://github.com/ultralytics/yolov3/issues/238#issuecomment-598028441
+    return 1.0 - 0.5 * eps, 0.5 * eps
 
 
 @register_model
@@ -88,8 +93,8 @@ class YOLOv7Loss(nn.Cell):
 
             # Regression
             grid = ops.stack([gi, gj], axis=1)
-            pxy = ops.Sigmoid()(ps[:, :2]) * 2. - 0.5
-            pwh = (ops.Sigmoid()(ps[:, 2:4]) * 2) ** 2 * anchors[i]
+            pxy = ps[:, :2].sigmoid() * 2. - 0.5
+            pwh = (ps[:, 2:4].sigmoid() * 2) ** 2 * anchors[i]
             pbox = ops.concat((pxy, pwh), 1)  # predicted box
             selected_tbox = targets[i][:, 2:6] * pre_gen_gains[i]
             selected_tbox[:, :2] -= grid
@@ -152,7 +157,7 @@ class YOLOv7Loss(nn.Cell):
             _this_indices *= _this_mask[None, :]
             _this_anch *= _this_mask[:, None]
 
-            b, a, gj, gi = ops.split(_this_indices, 0, 4)
+            b, a, gj, gi = ops.split(_this_indices, 0, 1)
             b, a, gj, gi = b.view(-1), a.view(-1), \
                            gj.view(-1), gi.view(-1)
 
@@ -161,8 +166,8 @@ class YOLOv7Loss(nn.Cell):
             p_cls += (fg_pred[:, 5:].view(batch_size, 3 * na * n_gt_max, -1),)
 
             grid = ops.stack((gi, gj), axis=1)
-            pxy = (ops.Sigmoid()(fg_pred[:, :2]) * 2. - 0.5 + grid) * self.stride[i]  # / 8.
-            pwh = (ops.Sigmoid()(fg_pred[:, 2:4]) * 2) ** 2 * _this_anch * self.stride[i]  # / 8.
+            pxy = (fg_pred[:, :2].sigmoid() * 2. - 0.5 + grid) * self.stride[i]  # / 8.
+            pwh = (fg_pred[:, 2:4].sigmoid() * 2) ** 2 * _this_anch * self.stride[i]  # / 8.
             pxywh = ops.concat((pxy, pwh), axis=-1)
             pxyxy = xywh2xyxy(pxywh)
 
@@ -207,7 +212,7 @@ class YOLOv7Loss(nn.Cell):
         gt_cls_per_image = ops.tile(ops.expand_dims(ops.cast(gt_cls_per_image, p_cls.dtype), 2),
                                     (1, 1, pxyxys.shape[1], 1))
 
-        cls_preds_ = ops.sqrt(ops.Sigmoid()(p_cls) * ops.Sigmoid()(p_obj))
+        cls_preds_ = ops.sqrt(p_cls.sigmoid() * p_obj.sigmoid())
         cls_preds_ = ops.tile(ops.expand_dims(cls_preds_, 1), (1, n_gt_max, 1, 1)) # (bs, nl*5*na*gt_max, 80) -> (bs, gt_max, nl*5*na*gt_max, 80)
         y = cls_preds_
 
@@ -428,8 +433,8 @@ class YOLOv7AuxLoss(nn.Cell):
             ps = pi[b, a, gj, gi]  # prediction subset corresponding to targets
             # 1.1. Regression
             grid = ops.stack([gi, gj], axis=1)
-            pxy = ops.Sigmoid()(ps[:, :2]) * 2. - 0.5
-            pwh = (ops.Sigmoid()(ps[:, 2:4]) * 2) ** 2 * anchors[i]
+            pxy = ps[:, :2].sigmoid() * 2. - 0.5
+            pwh = (ps[:, 2:4].sigmoid() * 2) ** 2 * anchors[i]
             pbox = ops.concat((pxy, pwh), 1)  # predicted box
             selected_tbox = targets[i][:, 2:6] * pre_gen_gains[i]
             selected_tbox[:, :2] -= grid
@@ -451,8 +456,8 @@ class YOLOv7AuxLoss(nn.Cell):
             ps_aux = pi[b_aux, a_aux, gj_aux, gi_aux]  # prediction subset corresponding to targets
             # 2.1. Regression
             grid_aux = ops.stack([gi_aux, gj_aux], axis=1)
-            pxy_aux = ops.Sigmoid()(ps_aux[:, :2]) * 2. - 0.5
-            pwh_aux = (ops.Sigmoid()(ps_aux[:, 2:4]) * 2) ** 2 * anchors_aux[i]
+            pxy_aux = ps_aux[:, :2].sigmoid() * 2. - 0.5
+            pwh_aux = (ps_aux[:, 2:4].sigmoid() * 2) ** 2 * anchors_aux[i]
             pbox_aux = ops.concat((pxy_aux, pwh_aux), 1)  # predicted box
             selected_tbox_aux = targets_aux[i][:, 2:6] * pre_gen_gains[i]
             selected_tbox_aux[:, :2] -= grid_aux
@@ -512,7 +517,7 @@ class YOLOv7AuxLoss(nn.Cell):
             _this_indices *= _this_mask[None, :]
             _this_anch *= _this_mask[:, None]
 
-            b, a, gj, gi = ops.split(_this_indices, 0, 4)
+            b, a, gj, gi = ops.split(_this_indices, 0, 1)
             b, a, gj, gi = b.view(-1), a.view(-1), \
                            gj.view(-1), gi.view(-1)
 
@@ -521,8 +526,8 @@ class YOLOv7AuxLoss(nn.Cell):
             p_cls += (fg_pred[:, 5:].view(batch_size, 3 * na * n_gt_max, -1),)
 
             grid = ops.stack((gi, gj), axis=1)
-            pxy = (ops.Sigmoid()(fg_pred[:, :2]) * 2. - 0.5 + grid) * self.stride[i]  # / 8.
-            pwh = (ops.Sigmoid()(fg_pred[:, 2:4]) * 2) ** 2 * _this_anch * self.stride[i]  # / 8.
+            pxy = (fg_pred[:, :2].sigmoid() * 2. - 0.5 + grid) * self.stride[i]  # / 8.
+            pwh = (fg_pred[:, 2:4].sigmoid() * 2) ** 2 * _this_anch * self.stride[i]  # / 8.
             pxywh = ops.concat((pxy, pwh), axis=-1)
             pxyxy = xywh2xyxy(pxywh)
 
@@ -568,7 +573,7 @@ class YOLOv7AuxLoss(nn.Cell):
         gt_cls_per_image = ops.tile(ops.expand_dims(ops.cast(gt_cls_per_image, p_cls.dtype), 2),
                                     (1, 1, pxyxys.shape[1], 1))
 
-        cls_preds_ = ops.sqrt(ops.Sigmoid()(p_cls) * ops.Sigmoid()(p_obj))
+        cls_preds_ = ops.sqrt(p_cls.sigmoid() * p_obj.sigmoid())
         cls_preds_ = ops.tile(ops.expand_dims(cls_preds_, 1), (1, n_gt_max, 1, 1)) # (bs, nl*5*na*gt_max, 80) -> (bs, gt_max, nl*5*na*gt_max, 80)
         y = cls_preds_
 
@@ -653,7 +658,7 @@ class YOLOv7AuxLoss(nn.Cell):
             _this_indices *= _this_mask[None, :]
             _this_anch *= _this_mask[:, None]
 
-            b, a, gj, gi = ops.split(_this_indices, 0, 4)
+            b, a, gj, gi = ops.split(_this_indices, 0, 1)
             b, a, gj, gi = b.view(-1), a.view(-1), \
                            gj.view(-1), gi.view(-1)
 
@@ -662,8 +667,8 @@ class YOLOv7AuxLoss(nn.Cell):
             p_cls += (fg_pred[:, 5:].view(batch_size, 5 * na * n_gt_max, -1),)
 
             grid = ops.stack((gi, gj), axis=1)
-            pxy = (ops.Sigmoid()(fg_pred[:, :2]) * 2. - 0.5 + grid) * self.stride[i]  # / 8.
-            pwh = (ops.Sigmoid()(fg_pred[:, 2:4]) * 2) ** 2 * _this_anch * self.stride[i]  # / 8.
+            pxy = (fg_pred[:, :2].sigmoid() * 2. - 0.5 + grid) * self.stride[i]  # / 8.
+            pwh = (fg_pred[:, 2:4].sigmoid() * 2) ** 2 * _this_anch * self.stride[i]  # / 8.
             pxywh = ops.concat((pxy, pwh), axis=-1)
             pxyxy = xywh2xyxy(pxywh)
 
@@ -709,7 +714,7 @@ class YOLOv7AuxLoss(nn.Cell):
         gt_cls_per_image = ops.tile(ops.expand_dims(ops.cast(gt_cls_per_image, p_cls.dtype), 2),
                                     (1, 1, pxyxys.shape[1], 1))
 
-        cls_preds_ = ops.sqrt(ops.Sigmoid()(p_cls) * ops.Sigmoid()(p_obj))
+        cls_preds_ = ops.sqrt(p_cls.sigmoid() * p_obj.sigmoid())
         cls_preds_ = ops.tile(ops.expand_dims(cls_preds_, 1),
                               (1, n_gt_max, 1, 1))  # (bs, nl*5*na*gt_max, 80) -> (bs, gt_max, nl*5*na*gt_max, 80)
         y = cls_preds_
