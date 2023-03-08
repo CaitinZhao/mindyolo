@@ -93,8 +93,8 @@ class YOLOv7Loss(nn.Cell):
 
             # Regression
             grid = ops.stack([gi, gj], axis=1)
-            pxy = ps[:, :2].sigmoid() * 2. - 0.5
-            pwh = (ps[:, 2:4].sigmoid() * 2) ** 2 * anchors[i]
+            pxy = ops.sigmoid(ps[:, :2]) * 2. - 0.5
+            pwh = (ops.sigmoid(ps[:, 2:4]) * 2) ** 2 * anchors[i]
             pbox = ops.concat((pxy, pwh), 1)  # predicted box
             selected_tbox = targets[i][:, 2:6] * pre_gen_gains[i]
             selected_tbox[:, :2] -= grid
@@ -166,8 +166,8 @@ class YOLOv7Loss(nn.Cell):
             p_cls += (fg_pred[:, 5:].view(batch_size, 3 * na * n_gt_max, -1),)
 
             grid = ops.stack((gi, gj), axis=1)
-            pxy = (fg_pred[:, :2].sigmoid() * 2. - 0.5 + grid) * self.stride[i]  # / 8.
-            pwh = (fg_pred[:, 2:4].sigmoid() * 2) ** 2 * _this_anch * self.stride[i]  # / 8.
+            pxy = (ops.sigmoid(fg_pred[:, :2]) * 2. - 0.5 + grid) * self.stride[i]  # / 8.
+            pwh = (ops.sigmoid(fg_pred[:, 2:4]) * 2) ** 2 * _this_anch * self.stride[i]  # / 8.
             pxywh = ops.concat((pxy, pwh), axis=-1)
             pxyxy = xywh2xyxy(pxywh)
 
@@ -212,7 +212,7 @@ class YOLOv7Loss(nn.Cell):
         gt_cls_per_image = ops.tile(ops.expand_dims(ops.cast(gt_cls_per_image, p_cls.dtype), 2),
                                     (1, 1, pxyxys.shape[1], 1))
 
-        cls_preds_ = ops.sqrt(p_cls.sigmoid() * p_obj.sigmoid())
+        cls_preds_ = ops.sqrt(ops.sigmoid(p_cls) * ops.sigmoid(p_obj))
         cls_preds_ = ops.tile(ops.expand_dims(cls_preds_, 1), (1, n_gt_max, 1, 1)) # (bs, nl*5*na*gt_max, 80) -> (bs, gt_max, nl*5*na*gt_max, 80)
         y = cls_preds_
 
@@ -433,8 +433,8 @@ class YOLOv7AuxLoss(nn.Cell):
             ps = pi[b, a, gj, gi]  # prediction subset corresponding to targets
             # 1.1. Regression
             grid = ops.stack([gi, gj], axis=1)
-            pxy = ps[:, :2].sigmoid() * 2. - 0.5
-            pwh = (ps[:, 2:4].sigmoid() * 2) ** 2 * anchors[i]
+            pxy = ops.sigmoid(ps[:, :2]) * 2. - 0.5
+            pwh = (ops.sigmoid(ps[:, 2:4]) * 2) ** 2 * anchors[i]
             pbox = ops.concat((pxy, pwh), 1)  # predicted box
             selected_tbox = targets[i][:, 2:6] * pre_gen_gains[i]
             selected_tbox[:, :2] -= grid
@@ -456,8 +456,8 @@ class YOLOv7AuxLoss(nn.Cell):
             ps_aux = pi[b_aux, a_aux, gj_aux, gi_aux]  # prediction subset corresponding to targets
             # 2.1. Regression
             grid_aux = ops.stack([gi_aux, gj_aux], axis=1)
-            pxy_aux = ps_aux[:, :2].sigmoid() * 2. - 0.5
-            pwh_aux = (ps_aux[:, 2:4].sigmoid() * 2) ** 2 * anchors_aux[i]
+            pxy_aux = ops.sigmoid(ps_aux[:, :2]) * 2. - 0.5
+            pwh_aux = (ops.sigmoid(ps_aux[:, 2:4]) * 2) ** 2 * anchors_aux[i]
             pbox_aux = ops.concat((pxy_aux, pwh_aux), 1)  # predicted box
             selected_tbox_aux = targets_aux[i][:, 2:6] * pre_gen_gains[i]
             selected_tbox_aux[:, :2] -= grid_aux
@@ -526,8 +526,8 @@ class YOLOv7AuxLoss(nn.Cell):
             p_cls += (fg_pred[:, 5:].view(batch_size, 3 * na * n_gt_max, -1),)
 
             grid = ops.stack((gi, gj), axis=1)
-            pxy = (fg_pred[:, :2].sigmoid() * 2. - 0.5 + grid) * self.stride[i]  # / 8.
-            pwh = (fg_pred[:, 2:4].sigmoid() * 2) ** 2 * _this_anch * self.stride[i]  # / 8.
+            pxy = (ops.sigmoid(fg_pred[:, :2]) * 2. - 0.5 + grid) * self.stride[i]  # / 8.
+            pwh = (ops.sigmoid(fg_pred[:, 2:4]) * 2) ** 2 * _this_anch * self.stride[i]  # / 8.
             pxywh = ops.concat((pxy, pwh), axis=-1)
             pxyxy = xywh2xyxy(pxywh)
 
@@ -573,7 +573,7 @@ class YOLOv7AuxLoss(nn.Cell):
         gt_cls_per_image = ops.tile(ops.expand_dims(ops.cast(gt_cls_per_image, p_cls.dtype), 2),
                                     (1, 1, pxyxys.shape[1], 1))
 
-        cls_preds_ = ops.sqrt(p_cls.sigmoid() * p_obj.sigmoid())
+        cls_preds_ = ops.sqrt(ops.sigmoid(p_cls) * ops.sigmoid(p_obj))
         cls_preds_ = ops.tile(ops.expand_dims(cls_preds_, 1), (1, n_gt_max, 1, 1)) # (bs, nl*5*na*gt_max, 80) -> (bs, gt_max, nl*5*na*gt_max, 80)
         y = cls_preds_
 
@@ -667,8 +667,8 @@ class YOLOv7AuxLoss(nn.Cell):
             p_cls += (fg_pred[:, 5:].view(batch_size, 5 * na * n_gt_max, -1),)
 
             grid = ops.stack((gi, gj), axis=1)
-            pxy = (fg_pred[:, :2].sigmoid() * 2. - 0.5 + grid) * self.stride[i]  # / 8.
-            pwh = (fg_pred[:, 2:4].sigmoid() * 2) ** 2 * _this_anch * self.stride[i]  # / 8.
+            pxy = (ops.sigmoid(fg_pred[:, :2]) * 2. - 0.5 + grid) * self.stride[i]  # / 8.
+            pwh = (ops.sigmoid(fg_pred[:, 2:4]) * 2) ** 2 * _this_anch * self.stride[i]  # / 8.
             pxywh = ops.concat((pxy, pwh), axis=-1)
             pxyxy = xywh2xyxy(pxywh)
 
@@ -714,7 +714,7 @@ class YOLOv7AuxLoss(nn.Cell):
         gt_cls_per_image = ops.tile(ops.expand_dims(ops.cast(gt_cls_per_image, p_cls.dtype), 2),
                                     (1, 1, pxyxys.shape[1], 1))
 
-        cls_preds_ = ops.sqrt(p_cls.sigmoid() * p_obj.sigmoid())
+        cls_preds_ = ops.sqrt(ops.sigmoid(p_cls) * ops.sigmoid(p_obj))
         cls_preds_ = ops.tile(ops.expand_dims(cls_preds_, 1),
                               (1, n_gt_max, 1, 1))  # (bs, nl*5*na*gt_max, 80) -> (bs, gt_max, nl*5*na*gt_max, 80)
         y = cls_preds_

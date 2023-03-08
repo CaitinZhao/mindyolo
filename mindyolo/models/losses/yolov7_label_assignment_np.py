@@ -1,8 +1,14 @@
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import mindspore as ms
+from mindspore import nn, ops
 
 from mindyolo.utils import logger
+
+
+@ops.constexpr
+def list2tensor(list_x, dtype=ms.int32):
+    return ms.Tensor(np.array(list_x), dtype)
 
 
 def box_iou_np(box1, box2):
@@ -69,6 +75,7 @@ class YOLOv7LabelAssignmentNp:
         na (int): channel numbers
         bias (float): bias in find positive
         stride (list): stride list of YOLO out's feature
+        anchor_t(float): filter threshold in find_positive
         use_aux (bool): whether use aux loss
         thread_num(int): number of multi-threaded parallels
 
@@ -79,8 +86,7 @@ class YOLOv7LabelAssignmentNp:
         img (Tensor): input image
     """
 
-    def __init__(self, anchors, na=3, bias=0.5, stride=[8, 16, 32], use_aux=False,
-                 thread_num=4):
+    def __init__(self, anchors, na=3, bias=0.5, stride=[8, 16, 32], anchor_t=4, use_aux=False, thread_num=4):
         super(YOLOv7LabelAssignmentNp, self).__init__()
         if isinstance(anchors, ms.Tensor):
             anchors = anchors.asnumpy()
@@ -100,6 +106,7 @@ class YOLOv7LabelAssignmentNp:
             ],
             dtype=np.float32) * bias  # offsets
         self.use_aux = use_aux
+        self.anchor_t = anchor_t
         self.pool = ThreadPoolExecutor(max_workers=thread_num)
         logger.info(f"start ThreadPoolExecutor, max_workers is {thread_num}")
 
@@ -124,7 +131,7 @@ class YOLOv7LabelAssignmentNp:
             if nt:
                 # Matches
                 r = t[:, :, 4:6] / anchors[:, None]  # wh ratio
-                j = np.maximum(r, 1. / r).max(2) < 4
+                j = np.maximum(r, 1. / r).max(2) < self.anchor_t
                 if not np.any(j):
                     t = targets[0]
                     offsets = 0
@@ -165,6 +172,7 @@ class YOLOv7LabelAssignmentNp:
             return None
         this_target = targets[b_idx]
         txywh = this_target[:, 2:6] * imgs_h
+        # this_target[:, 2:6] * 640
         txyxy = xywh2xyxy(txywh)  # tensor op
 
         pxyxys, p_cls, p_obj = [], [], []
@@ -262,18 +270,11 @@ class YOLOv7LabelAssignmentNp:
         this_target = this_target[matched_gt_inds]
         return batch_idx, all_b, all_a, all_gj, all_gi, this_target, all_anch, from_which_layer
 
-    def build_targets(self, p, targets, imgs, min_topk=10, g=0.5):
-        logger.info("build_targets")
-        targets = targets.asnumpy().astype(np.float32)
-        p = [pp.asnumpy() for pp in p]
-        batch_size, img_h = imgs.shape[0], imgs.shape[2]
-        logger.info("asnumpy")
-
+    def build_targets(self, p, targets, batch_size, img_h, min_topk=10, g=0.5, max_gt=None):
         targets = targets.reshape((-1, 6))
         targets = targets[targets[:, 1] >= 0]
         indices, anch = self.find_positive(p, targets, self.anchors, g)
         # numpy indices, anch for fast assign
-
         matching_bs = [[] for _ in p]
         matching_as = [[] for _ in p]
         matching_gjs = [[] for _ in p]
@@ -282,7 +283,8 @@ class YOLOv7LabelAssignmentNp:
         matching_anchs = [[] for _ in p]
 
         nl = len(p)
-        data = [(batch_idx, p, targets, indices, anch, img_h, min_topk) for batch_idx in range(batch_size)]
+        data = [(batch_idx, p, targets, indices, anch, img_h, min_topk)
+                for batch_idx in range(p[0].shape[0])]
         for res in self.pool.map(self.build_target_batch, data):
             if res is not None:
                 batch_idx, all_b, all_a, all_gj, all_gi, this_target, all_anch, from_which_layer = res
@@ -294,13 +296,12 @@ class YOLOv7LabelAssignmentNp:
                     matching_gis[i].append(all_gi[layer_idx])
                     matching_targets[i].append(this_target[layer_idx])
                     matching_anchs[i].append(all_anch[layer_idx])
-        logger.info("build_target_batch")
-        max_gt = p[0].shape[0] * 10 * min_topk
+        max_gt = batch_size * 10 * min_topk
         masks = [[] for _ in p]
         for i in range(nl):
             h, w = p[i].shape[2], p[i].shape[3]
             gains = [w, h, w, h]
-            bs, as_, gjs, gis, tgts, anchs, mask = np.zeros(max_gt, np.int32), np.zeros(max_gt, np.int32),\
+            bs, as_, gjs, gis, tgts, anchs, mask = np.zeros(max_gt, np.int32), np.zeros(max_gt, np.int32), \
                                                    np.zeros(max_gt, np.int32), np.zeros(max_gt, np.int32), \
                                                    np.zeros((max_gt, 6), np.float32), \
                                                    np.zeros((max_gt, 2), np.float32), \
@@ -310,7 +311,7 @@ class YOLOv7LabelAssignmentNp:
                 m_b = np.concatenate(matching_bs[i], 0)
                 pos_size = m_b.shape[0]
                 if pos_size > max_gt:
-                    logger.warning(f"Positive box {pos_size} more than max_gt {max_gt}")
+                    print(f"WARNING posistive box {pos_size} more than max_gt {max_gt}")
                     pos_size = max_gt
                 bs[:pos_size] = m_b[:pos_size]
                 as_[:pos_size] = np.concatenate(matching_as[i], 0)[:pos_size]
@@ -322,22 +323,85 @@ class YOLOv7LabelAssignmentNp:
                 tgts[:, 2:4] -= grid
                 anchs[:pos_size] = np.concatenate(matching_anchs[i], 0)[:pos_size]
                 mask[:pos_size] = np.ones((pos_size, 1), np.float32)[:pos_size]
-            matching_bs[i] = ms.Tensor.from_numpy(bs)
-            matching_as[i] = ms.Tensor.from_numpy(as_)
-            matching_gjs[i] = ms.Tensor.from_numpy(gjs)
-            matching_gis[i] = ms.Tensor.from_numpy(gis)
-            matching_targets[i] = ms.Tensor.from_numpy(tgts)
-            matching_anchs[i] = ms.Tensor.from_numpy(anchs)
-            masks[i] = ms.Tensor.from_numpy(mask)
-        logger.info("build_target done")
+            matching_bs[i] = bs
+            matching_as[i] = as_
+            matching_gjs[i] = gjs
+            matching_gis[i] = gis
+            matching_targets[i] = tgts
+            matching_anchs[i] = anchs
+            masks[i] = mask
+
+        matching_bs = np.stack(matching_bs, 0)
+        matching_as = np.stack(matching_as, 0)
+        matching_gjs = np.stack(matching_gjs, 0)
+        matching_gis = np.stack(matching_gis, 0)
+        matching_targets = np.stack(matching_targets, 0)
+        matching_anchs = np.stack(matching_anchs, 0)
+        masks = np.stack(masks, 0)
         return matching_bs, matching_as, matching_gjs, matching_gis, matching_targets, matching_anchs, masks
 
-    def __call__(self, p, targets, imgs):
+    def call(self, fuse_p, targets, imgs, w_list, h_list):
+        p = []
+        last_idx = 0
+        B, A, _, C = fuse_p.shape
+        for w, h in zip(w_list, h_list):
+            p.append(fuse_p[:, :, last_idx:w*h+last_idx, :].reshape((B, A, h, w, C)))
+            last_idx += w*h
+        batch_size, img_h = imgs.shape[0], imgs.shape[2]
         if not self.use_aux:
-            bs, as_, gjs, gis, targets, anchors, mask = self.build_targets(p, targets, imgs, min_topk=10, g=self.bias)
-            return bs, as_, gjs, gis, targets, anchors, mask
+            return self.build_targets(p, targets, batch_size, img_h, min_topk=10, g=self.bias)
         bs_aux, as_aux, gjs_aux, gis_aux, targets_aux, anchors_aux, mask_aux = self.build_targets(
-            p, targets, imgs, min_topk=20, g=self.bias * 2)
-        bs, as_, gjs, gis, targets, anchors, mask = self.build_targets(p, targets, imgs, min_topk=10, g=self.bias)
+            p, targets, batch_size, img_h, min_topk=20, g=self.bias * 2)
+        bs, as_, gjs, gis, targets, anchors, mask = self.build_targets(p, targets, batch_size, img_h,
+                                                                       min_topk=10, g=self.bias)
         return bs, as_, gjs, gis, targets, anchors, mask, \
                bs_aux, as_aux, gjs_aux, gis_aux, targets_aux, anchors_aux, mask_aux
+
+
+class YOLOv7LabelAssignment(nn.Cell):
+    def __init__(self, anchors, na=3, bias=0.5, stride=[8, 16, 32], anchor_t=4, use_aux=False, thread_num=4):
+        super(YOLOv7LabelAssignment, self).__init__()
+        label_assignment = YOLOv7LabelAssignmentNp(anchors, na, bias, stride, anchor_t, use_aux, thread_num)
+        self.nl = len(anchors)
+        self.anchor_t = anchor_t
+
+        def infer_shape(p, targets, imgs, w_list, h_list):
+            batch_size = p[0]
+            max_gt = batch_size * 100
+            out_shapes = ((self.nl, max_gt,), (self.nl, max_gt,), (self.nl, max_gt,), (self.nl, max_gt,),
+                          (self.nl, max_gt, 6), (self.nl, max_gt, 2), (self.nl, max_gt, 1))
+            if use_aux:
+                max_gt = batch_size * 200
+                out_shapes += ((self.nl, max_gt,), (self.nl, max_gt,), (self.nl, max_gt,), (self.nl, max_gt,),
+                               (self.nl, max_gt, 6), (self.nl, max_gt, 2), (self.nl, max_gt, 1))
+            return out_shapes
+
+        def infer_type(p, targets, imgs, w_list, h_list):
+            out_types = (ms.int32, ms.int32, ms.int32, ms.int32, ms.float32, ms.float32, ms.float32)
+            if use_aux:
+                out_types += (ms.int32, ms.int32, ms.int32, ms.int32, ms.float32, ms.float32, ms.float32)
+            return out_types
+
+        def bprob(p, targets, imgs, w_list, h_list, out, dout):
+            return None, None, None, None, None
+
+        self.run_op = ops.Custom(label_assignment.call, out_shape=infer_shape, out_dtype=infer_type,
+                                 func_type="pyfunc", bprop=bprob)
+
+    def stop_gradient(self, inputs):
+        res = ()
+        for inp in inputs:
+            res += (ops.stop_gradient(inp),)
+        return res
+
+    def construct(self, p, targets, imgs):
+        w_list = []
+        h_list = []
+        fuse_p = []
+        for pp in p:
+            B, A, H, W, C = pp.shape
+            fuse_p.append(pp.reshape((B, A, -1, C)))
+            w_list.append(W)
+            h_list.append(H)
+        fuse_p = ops.concat(fuse_p, 2)
+        return self.stop_gradient(self.run_op(fuse_p, targets, imgs, list2tensor(w_list), list2tensor(h_list)))

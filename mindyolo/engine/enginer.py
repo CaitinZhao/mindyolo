@@ -540,8 +540,7 @@ class Enginer:
             pred = network(x)
             loss, loss_items = loss_fn(pred, label, x)
             loss *= rank_size
-            logger.info("forward_func")
-            return scaler.unscale(loss), loss_items
+            return scaler.scale(loss), loss_items
 
         grad_fn = ops.value_and_grad(forward_func, grad_position=None, weights=optimizer.parameters, has_aux=True)
         # grad_fn = ops.GradOperation(get_by_list=True, sens_param=True)(forward_func, optimizer.parameters)
@@ -554,6 +553,7 @@ class Enginer:
             status = init_status()
             (loss, loss_items), grads = grad_fn(x, label, sizes)
             grads = scaler.unscale(grads)
+            loss = scaler.unscale(loss)
             grads = reducer(grads)
             grads_finite = all_finite(grads, status)
 
@@ -563,7 +563,6 @@ class Enginer:
                 else:
                     if overflow_still_update:
                         loss = ops.depend(loss, optimizer(grads))
-            logger.info("grad_fn")
             return loss, loss_items, grads, grads_finite
 
         @ms.ms_function
