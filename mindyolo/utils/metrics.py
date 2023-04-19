@@ -55,8 +55,9 @@ def non_max_suppression(prediction, conf_thres=0.25, iou_thres=0.45, classes=Non
             i, j = (x[:, 5:] > conf_thres).nonzero()
             x = np.concatenate((box[i], x[i, j + 5, None], j[:, None].astype(np.float)), 1)
         else:  # best class only
-            conf, j = x[:, 5:].max(1, keepdim=True)
-            x = np.concatenate((box, conf, j.float()), 1)[conf.view(-1) > conf_thres]
+            conf = x[:, 5:].max(1, keepdims=True)
+            j = x[:, 5:].argmax(1)[:, None].astype(conf.dtype)
+            x = np.concatenate((box, conf, j), 1)[conf.reshape(-1) > conf_thres]
 
         # Filter by class
         if classes is not None:
